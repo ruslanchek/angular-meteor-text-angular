@@ -31,6 +31,1629 @@ Commonjs package manager support (eg componentjs).
 // ie < 9 // Anything less than IE9
 // ----------------------------------------------------------
 /* istanbul ignore next: untestable browser check */
+
+
+
+// tests against the current jqLite/jquery implementation if this can be an element
+function validElementString(string){
+	try{
+		return angular.element(string).length !== 0;
+	}catch(any){
+		return false;
+	}
+}
+// setup the global contstant functions for setting up the toolbar
+
+// all tool definitions
+var taTools = {};
+/*
+	A tool definition is an object with the following key/value parameters:
+		action: [function(deferred, restoreSelection)]
+				a function that is executed on clicking on the button - this will allways be executed using ng-click and will
+				overwrite any ng-click value in the display attribute.
+				The function is passed a deferred object ($q.defer()), if this is wanted to be used `return false;` from the action and
+				manually call `deferred.resolve();` elsewhere to notify the editor that the action has finished.
+				restoreSelection is only defined if the rangy library is included and it can be called as `restoreSelection()` to restore the users
+				selection in the WYSIWYG editor.
+		display: [string]?
+				Optional, an HTML element to be displayed as the button. The `scope` of the button is the tool definition object with some additional functions
+				If set this will cause buttontext and iconclass to be ignored
+		class: [string]?
+				Optional, if set will override the taOptions.classes.toolbarButton class.
+		buttontext: [string]?
+				if this is defined it will replace the contents of the element contained in the `display` element
+		iconclass: [string]?
+				if this is defined an icon (<i>) will be appended to the `display` element with this string as it's class
+		tooltiptext: [string]?
+				Optional, a plain text description of the action, used for the title attribute of the action button in the toolbar by default.
+		activestate: [function(commonElement)]?
+				this function is called on every caret movement, if it returns true then the class taOptions.classes.toolbarButtonActive
+				will be applied to the `display` element, else the class will be removed
+		disabled: [function()]?
+				if this function returns true then the tool will have the class taOptions.classes.disabled applied to it, else it will be removed
+	Other functions available on the scope are:
+		name: [string]
+				the name of the tool, this is the first parameter passed into taRegisterTool
+		isDisabled: [function()]
+				returns true if the tool is disabled, false if it isn't
+		displayActiveToolClass: [function(boolean)]
+				returns true if the tool is 'active' in the currently focussed toolbar
+		onElementSelect: [Object]
+				This object contains the following key/value pairs and is used to trigger the ta-element-select event
+				element: [String]
+					an element name, will only trigger the onElementSelect action if the tagName of the element matches this string
+				filter: [function(element)]?
+					an optional filter that returns a boolean, if true it will trigger the onElementSelect.
+				action: [function(event, element, editorScope)]
+					the action that should be executed if the onElementSelect function runs
+*/
+// name and toolDefinition to add into the tools available to be added on the toolbar
+function registerTextAngularTool(name, toolDefinition){
+	if(!name || name === '' || taTools.hasOwnProperty(name)) throw('textAngular Error: A unique name is required for a Tool Definition');
+	if(
+		(toolDefinition.display && (toolDefinition.display === '' || !validElementString(toolDefinition.display))) ||
+		(!toolDefinition.display && !toolDefinition.buttontext && !toolDefinition.iconclass)
+	)
+		throw('textAngular Error: Tool Definition for "' + name + '" does not have a valid display/iconclass/buttontext value');
+	taTools[name] = toolDefinition;
+}
+
+angular.module('textAngularSetup', [])
+.constant('taRegisterTool', registerTextAngularTool)
+.value('taTools', taTools)
+// Here we set up the global display defaults, to set your own use a angular $provider#decorator.
+.value('taOptions',  {
+	//////////////////////////////////////////////////////////////////////////////////////
+    // forceTextAngularSanitize
+    // set false to allow the textAngular-sanitize provider to be replaced
+    // with angular-sanitize or a custom provider.
+	forceTextAngularSanitize: true,
+	///////////////////////////////////////////////////////////////////////////////////////
+	// keyMappings
+	// allow customizable keyMappings for specialized key boards or languages
+	//
+	// keyMappings provides key mappings that are attached to a given commandKeyCode.
+	// To modify a specific keyboard binding, simply provide function which returns true
+	// for the event you wish to map to.
+	// Or to disable a specific keyboard binding, provide a function which returns false.
+	// Note: 'RedoKey' and 'UndoKey' are internally bound to the redo and undo functionality.
+	// At present, the following commandKeyCodes are in use:
+	// 98, 'TabKey', 'ShiftTabKey', 105, 117, 'UndoKey', 'RedoKey'
+	//
+	// To map to an new commandKeyCode, add a new key mapping such as:
+	// {commandKeyCode: 'CustomKey', testForKey: function (event) {
+	//  if (event.keyCode=57 && event.ctrlKey && !event.shiftKey && !event.altKey) return true;
+	// } }
+	// to the keyMappings. This example maps ctrl+9 to 'CustomKey'
+	// Then where taRegisterTool(...) is called, add a commandKeyCode: 'CustomKey' and your
+	// tool will be bound to ctrl+9.
+	//
+	// To disble one of the already bound commandKeyCodes such as 'RedoKey' or 'UndoKey' add:
+	// {commandKeyCode: 'RedoKey', testForKey: function (event) { return false; } },
+	// {commandKeyCode: 'UndoKey', testForKey: function (event) { return false; } },
+	// to disable them.
+	//
+	keyMappings : [],
+	toolbar: [
+		['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'pre', 'quote'],
+		['bold', 'italics', 'underline', 'strikeThrough', 'ul', 'ol', 'redo', 'undo', 'clear'],
+		['justifyLeft','justifyCenter','justifyRight','justifyFull','indent','outdent'],
+		['html', 'insertImage', 'insertLink', 'insertVideo', 'wordcount', 'charcount']
+	],
+	classes: {
+		focussed: "focussed",
+		toolbar: "btn-toolbar",
+		toolbarGroup: "btn-group",
+		toolbarButton: "btn btn-default",
+		toolbarButtonActive: "active",
+		disabled: "disabled",
+		textEditor: 'form-control',
+		htmlEditor: 'form-control'
+	},
+	defaultTagAttributes : {
+		a: {target:""}
+	},
+	setup: {
+		// wysiwyg mode
+		textEditorSetup: function($element){ /* Do some processing here */ },
+		// raw html
+		htmlEditorSetup: function($element){ /* Do some processing here */ }
+	},
+	defaultFileDropHandler:
+		/* istanbul ignore next: untestable image processing */
+		function(file, insertAction){
+			var reader = new FileReader();
+			if(file.type.substring(0, 5) === 'image'){
+				reader.onload = function() {
+					if(reader.result !== '') insertAction('insertImage', reader.result, true);
+				};
+
+				reader.readAsDataURL(file);
+				// NOTE: For async procedures return a promise and resolve it when the editor should update the model.
+				return true;
+			}
+			return false;
+		}
+})
+
+// This is the element selector string that is used to catch click events within a taBind, prevents the default and $emits a 'ta-element-select' event
+// these are individually used in an angular.element().find() call. What can go here depends on whether you have full jQuery loaded or just jQLite with angularjs.
+// div is only used as div.ta-insert-video caught in filter.
+.value('taSelectableElements', ['a','img'])
+
+// This is an array of objects with the following options:
+//				selector: <string> a jqLite or jQuery selector string
+//				customAttribute: <string> an attribute to search for
+//				renderLogic: <function(element)>
+// Both or one of selector and customAttribute must be defined.
+.value('taCustomRenderers', [
+	{
+		// Parse back out: '<div class="ta-insert-video" ta-insert-video src="' + urlLink + '" allowfullscreen="true" width="300" frameborder="0" height="250"></div>'
+		// To correct video element. For now only support youtube
+		selector: 'img',
+		customAttribute: 'ta-insert-video',
+		renderLogic: function(element){
+			var iframe = angular.element('<iframe></iframe>');
+			var attributes = element.prop("attributes");
+			// loop through element attributes and apply them on iframe
+			angular.forEach(attributes, function(attr) {
+				iframe.attr(attr.name, attr.value);
+			});
+			iframe.attr('src', iframe.attr('ta-insert-video'));
+			element.replaceWith(iframe);
+		}
+	}
+])
+
+.value('taTranslations', {
+	// moved to sub-elements
+	//toggleHTML: "Toggle HTML",
+	//insertImage: "Please enter a image URL to insert",
+	//insertLink: "Please enter a URL to insert",
+	//insertVideo: "Please enter a youtube URL to embed",
+	html: {
+		tooltip: 'Toggle html / Rich Text'
+	},
+	// tooltip for heading - might be worth splitting
+	heading: {
+		tooltip: 'Heading '
+	},
+	p: {
+		tooltip: 'Paragraph'
+	},
+	pre: {
+		tooltip: 'Preformatted text'
+	},
+	ul: {
+		tooltip: 'Unordered List'
+	},
+	ol: {
+		tooltip: 'Ordered List'
+	},
+	quote: {
+		tooltip: 'Quote/unquote selection or paragraph'
+	},
+	undo: {
+		tooltip: 'Undo'
+	},
+	redo: {
+		tooltip: 'Redo'
+	},
+	bold: {
+		tooltip: 'Bold'
+	},
+	italic: {
+		tooltip: 'Italic'
+	},
+	underline: {
+		tooltip: 'Underline'
+	},
+	strikeThrough:{
+		tooltip: 'Strikethrough'
+	},
+	justifyLeft: {
+		tooltip: 'Align text left'
+	},
+	justifyRight: {
+		tooltip: 'Align text right'
+	},
+	justifyFull: {
+		tooltip: 'Justify text'
+	},
+	justifyCenter: {
+		tooltip: 'Center'
+	},
+	indent: {
+		tooltip: 'Increase indent'
+	},
+	outdent: {
+		tooltip: 'Decrease indent'
+	},
+	clear: {
+		tooltip: 'Clear formatting'
+	},
+	insertImage: {
+		dialogPrompt: 'Please enter an image URL to insert',
+		tooltip: 'Insert image',
+		hotkey: 'the - possibly language dependent hotkey ... for some future implementation'
+	},
+	insertVideo: {
+		tooltip: 'Insert video',
+		dialogPrompt: 'Please enter a youtube URL to embed'
+	},
+	insertLink: {
+		tooltip: 'Insert / edit link',
+		dialogPrompt: "Please enter a URL to insert"
+	},
+	editLink: {
+		reLinkButton: {
+			tooltip: "Relink"
+		},
+		unLinkButton: {
+			tooltip: "Unlink"
+		},
+		targetToggle: {
+			buttontext: "Open in New Window"
+		}
+	},
+	wordcount: {
+		tooltip: 'Display words Count'
+	},
+		charcount: {
+		tooltip: 'Display characters Count'
+	}
+})
+.factory('taToolFunctions', ['$window','taTranslations', function($window, taTranslations) {
+	return {
+		imgOnSelectAction: function(event, $element, editorScope){
+			// setup the editor toolbar
+			// Credit to the work at http://hackerwins.github.io/summernote/ for this editbar logic/display
+			var finishEdit = function(){
+				editorScope.updateTaBindtaTextElement();
+				editorScope.hidePopover();
+			};
+			event.preventDefault();
+			editorScope.displayElements.popover.css('width', '375px');
+			var container = editorScope.displayElements.popoverContainer;
+			container.empty();
+			var buttonGroup = angular.element('<div class="btn-group" style="padding-right: 6px;">');
+			var fullButton = angular.element('<button type="button" class="btn btn-default btn-sm btn-small" unselectable="on" tabindex="-1">100% </button>');
+			fullButton.on('click', function(event){
+				event.preventDefault();
+				$element.css({
+					'width': '100%',
+					'height': ''
+				});
+				finishEdit();
+			});
+			var halfButton = angular.element('<button type="button" class="btn btn-default btn-sm btn-small" unselectable="on" tabindex="-1">50% </button>');
+			halfButton.on('click', function(event){
+				event.preventDefault();
+				$element.css({
+					'width': '50%',
+					'height': ''
+				});
+				finishEdit();
+			});
+			var quartButton = angular.element('<button type="button" class="btn btn-default btn-sm btn-small" unselectable="on" tabindex="-1">25% </button>');
+			quartButton.on('click', function(event){
+				event.preventDefault();
+				$element.css({
+					'width': '25%',
+					'height': ''
+				});
+				finishEdit();
+			});
+			var resetButton = angular.element('<button type="button" class="btn btn-default btn-sm btn-small" unselectable="on" tabindex="-1">Reset</button>');
+			resetButton.on('click', function(event){
+				event.preventDefault();
+				$element.css({
+					width: '',
+					height: ''
+				});
+				finishEdit();
+			});
+			buttonGroup.append(fullButton);
+			buttonGroup.append(halfButton);
+			buttonGroup.append(quartButton);
+			buttonGroup.append(resetButton);
+			container.append(buttonGroup);
+
+			buttonGroup = angular.element('<div class="btn-group" style="padding-right: 6px;">');
+			var floatLeft = angular.element('<button type="button" class="btn btn-default btn-sm btn-small" unselectable="on" tabindex="-1"><i class="fa fa-align-left"></i></button>');
+			floatLeft.on('click', function(event){
+				event.preventDefault();
+				// webkit
+				$element.css('float', 'left');
+				// firefox
+				$element.css('cssFloat', 'left');
+				// IE < 8
+				$element.css('styleFloat', 'left');
+				finishEdit();
+			});
+			var floatRight = angular.element('<button type="button" class="btn btn-default btn-sm btn-small" unselectable="on" tabindex="-1"><i class="fa fa-align-right"></i></button>');
+			floatRight.on('click', function(event){
+				event.preventDefault();
+				// webkit
+				$element.css('float', 'right');
+				// firefox
+				$element.css('cssFloat', 'right');
+				// IE < 8
+				$element.css('styleFloat', 'right');
+				finishEdit();
+			});
+			var floatNone = angular.element('<button type="button" class="btn btn-default btn-sm btn-small" unselectable="on" tabindex="-1"><i class="fa fa-align-justify"></i></button>');
+			floatNone.on('click', function(event){
+				event.preventDefault();
+				// webkit
+				$element.css('float', '');
+				// firefox
+				$element.css('cssFloat', '');
+				// IE < 8
+				$element.css('styleFloat', '');
+				finishEdit();
+			});
+			buttonGroup.append(floatLeft);
+			buttonGroup.append(floatNone);
+			buttonGroup.append(floatRight);
+			container.append(buttonGroup);
+
+			buttonGroup = angular.element('<div class="btn-group">');
+			var remove = angular.element('<button type="button" class="btn btn-default btn-sm btn-small" unselectable="on" tabindex="-1"><i class="fa fa-trash-o"></i></button>');
+			remove.on('click', function(event){
+				event.preventDefault();
+				$element.remove();
+				finishEdit();
+			});
+			buttonGroup.append(remove);
+			container.append(buttonGroup);
+
+			editorScope.showPopover($element);
+			editorScope.showResizeOverlay($element);
+		},
+		aOnSelectAction: function(event, $element, editorScope){
+			// setup the editor toolbar
+			// Credit to the work at http://hackerwins.github.io/summernote/ for this editbar logic
+			event.preventDefault();
+			editorScope.displayElements.popover.css('width', '436px');
+			var container = editorScope.displayElements.popoverContainer;
+			container.empty();
+			container.css('line-height', '28px');
+			var link = angular.element('<a href="' + $element.attr('href') + '" target="_blank">' + $element.attr('href') + '</a>');
+			link.css({
+				'display': 'inline-block',
+				'max-width': '200px',
+				'overflow': 'hidden',
+				'text-overflow': 'ellipsis',
+				'white-space': 'nowrap',
+				'vertical-align': 'middle'
+			});
+			container.append(link);
+			var buttonGroup = angular.element('<div class="btn-group pull-right">');
+			var reLinkButton = angular.element('<button type="button" class="btn btn-default btn-sm btn-small" tabindex="-1" unselectable="on" title="' + taTranslations.editLink.reLinkButton.tooltip + '"><i class="fa fa-edit icon-edit"></i></button>');
+			reLinkButton.on('click', function(event){
+				event.preventDefault();
+				var urlLink = $window.prompt(taTranslations.insertLink.dialogPrompt, $element.attr('href'));
+				if(urlLink && urlLink !== '' && urlLink !== 'http://'){
+					$element.attr('href', urlLink);
+					editorScope.updateTaBindtaTextElement();
+				}
+				editorScope.hidePopover();
+			});
+			buttonGroup.append(reLinkButton);
+			var unLinkButton = angular.element('<button type="button" class="btn btn-default btn-sm btn-small" tabindex="-1" unselectable="on" title="' + taTranslations.editLink.unLinkButton.tooltip + '"><i class="fa fa-unlink icon-unlink"></i></button>');
+			// directly before this click event is fired a digest is fired off whereby the reference to $element is orphaned off
+			unLinkButton.on('click', function(event){
+				event.preventDefault();
+				$element.replaceWith($element.contents());
+				editorScope.updateTaBindtaTextElement();
+				editorScope.hidePopover();
+			});
+			buttonGroup.append(unLinkButton);
+			var targetToggle = angular.element('<button type="button" class="btn btn-default btn-sm btn-small" tabindex="-1" unselectable="on">' + taTranslations.editLink.targetToggle.buttontext + '</button>');
+			if($element.attr('target') === '_blank'){
+				targetToggle.addClass('active');
+			}
+			targetToggle.on('click', function(event){
+				event.preventDefault();
+				$element.attr('target', ($element.attr('target') === '_blank') ? '' : '_blank');
+				targetToggle.toggleClass('active');
+				editorScope.updateTaBindtaTextElement();
+			});
+			buttonGroup.append(targetToggle);
+			container.append(buttonGroup);
+			editorScope.showPopover($element);
+		},
+		extractYoutubeVideoId: function(url) {
+			var re = /(?:youtube(?:-nocookie)?\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|\S*?[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})/i;
+			var match = url.match(re);
+			return (match && match[1]) || null;
+		}
+	};
+}])
+.run(['taRegisterTool', '$window', 'taTranslations', 'taSelection', 'taToolFunctions', '$sanitize', 'taOptions', function(taRegisterTool, $window, taTranslations, taSelection, taToolFunctions, $sanitize, taOptions){
+	// test for the version of $sanitize that is in use
+	// You can disable this check by setting taOptions.textAngularSanitize == false
+	var gv = {}; $sanitize('', gv);
+	/* istanbul ignore next, throws error */
+	if ((taOptions.forceTextAngularSanitize===true) && (gv.version !== 'taSanitize')) {
+		throw angular.$$minErr('textAngular')("textAngularSetup", "The textAngular-sanitize provider has been replaced by another -- have you included angular-sanitize by mistake?");
+	}
+	taRegisterTool("html", {
+		iconclass: 'fa fa-code',
+		tooltiptext: taTranslations.html.tooltip,
+		action: function(){
+			this.$editor().switchView();
+		},
+		activeState: function(){
+			return this.$editor().showHtml;
+		}
+	});
+	// add the Header tools
+	// convenience functions so that the loop works correctly
+	var _retActiveStateFunction = function(q){
+		return function(){ return this.$editor().queryFormatBlockState(q); };
+	};
+	var headerAction = function(){
+		return this.$editor().wrapSelection("formatBlock", "<" + this.name.toUpperCase() +">");
+	};
+	angular.forEach(['h1','h2','h3','h4','h5','h6'], function(h){
+		taRegisterTool(h.toLowerCase(), {
+			buttontext: h.toUpperCase(),
+			tooltiptext: taTranslations.heading.tooltip + h.charAt(1),
+			action: headerAction,
+			activeState: _retActiveStateFunction(h.toLowerCase())
+		});
+	});
+	taRegisterTool('p', {
+		buttontext: 'P',
+		tooltiptext: taTranslations.p.tooltip,
+		action: function(){
+			return this.$editor().wrapSelection("formatBlock", "<P>");
+		},
+		activeState: function(){ return this.$editor().queryFormatBlockState('p'); }
+	});
+	// key: pre -> taTranslations[key].tooltip, taTranslations[key].buttontext
+	taRegisterTool('pre', {
+		buttontext: 'pre',
+		tooltiptext: taTranslations.pre.tooltip,
+		action: function(){
+			return this.$editor().wrapSelection("formatBlock", "<PRE>");
+		},
+		activeState: function(){ return this.$editor().queryFormatBlockState('pre'); }
+	});
+	taRegisterTool('ul', {
+		iconclass: 'fa fa-list-ul',
+		tooltiptext: taTranslations.ul.tooltip,
+		action: function(){
+			return this.$editor().wrapSelection("insertUnorderedList", null);
+		},
+		activeState: function(){ return this.$editor().queryCommandState('insertUnorderedList'); }
+	});
+	taRegisterTool('ol', {
+		iconclass: 'fa fa-list-ol',
+		tooltiptext: taTranslations.ol.tooltip,
+		action: function(){
+			return this.$editor().wrapSelection("insertOrderedList", null);
+		},
+		activeState: function(){ return this.$editor().queryCommandState('insertOrderedList'); }
+	});
+	taRegisterTool('quote', {
+		iconclass: 'fa fa-quote-right',
+		tooltiptext: taTranslations.quote.tooltip,
+		action: function(){
+			return this.$editor().wrapSelection("formatBlock", "<BLOCKQUOTE>");
+		},
+		activeState: function(){ return this.$editor().queryFormatBlockState('blockquote'); }
+	});
+	taRegisterTool('undo', {
+		iconclass: 'fa fa-undo',
+		tooltiptext: taTranslations.undo.tooltip,
+		action: function(){
+			return this.$editor().wrapSelection("undo", null);
+		}
+	});
+	taRegisterTool('redo', {
+		iconclass: 'fa fa-repeat',
+		tooltiptext: taTranslations.redo.tooltip,
+		action: function(){
+			return this.$editor().wrapSelection("redo", null);
+		}
+	});
+	taRegisterTool('bold', {
+		iconclass: 'fa fa-bold',
+		tooltiptext: taTranslations.bold.tooltip,
+		action: function(){
+			return this.$editor().wrapSelection("bold", null);
+		},
+		activeState: function(){
+			return this.$editor().queryCommandState('bold');
+		},
+		commandKeyCode: 98
+	});
+	taRegisterTool('justifyLeft', {
+		iconclass: 'fa fa-align-left',
+		tooltiptext: taTranslations.justifyLeft.tooltip,
+		action: function(){
+			return this.$editor().wrapSelection("justifyLeft", null);
+		},
+		activeState: function(commonElement){
+			/* istanbul ignore next: */
+			if (commonElement && commonElement.nodeName === '#document') return false;
+			var result = false;
+			if (commonElement)
+				result =
+					commonElement.css('text-align') === 'left' ||
+					commonElement.attr('align') === 'left' ||
+					(
+						commonElement.css('text-align') !== 'right' &&
+						commonElement.css('text-align') !== 'center' &&
+						commonElement.css('text-align') !== 'justify' && !this.$editor().queryCommandState('justifyRight') && !this.$editor().queryCommandState('justifyCenter')
+					) && !this.$editor().queryCommandState('justifyFull');
+			result = result || this.$editor().queryCommandState('justifyLeft');
+			return result;
+		}
+	});
+	taRegisterTool('justifyRight', {
+		iconclass: 'fa fa-align-right',
+		tooltiptext: taTranslations.justifyRight.tooltip,
+		action: function(){
+			return this.$editor().wrapSelection("justifyRight", null);
+		},
+		activeState: function(commonElement){
+			/* istanbul ignore next: */
+			if (commonElement && commonElement.nodeName === '#document') return false;
+			var result = false;
+			if(commonElement) result = commonElement.css('text-align') === 'right';
+			result = result || this.$editor().queryCommandState('justifyRight');
+			return result;
+		}
+	});
+	taRegisterTool('justifyFull', {
+		iconclass: 'fa fa-align-justify',
+		tooltiptext: taTranslations.justifyFull.tooltip,
+		action: function(){
+			return this.$editor().wrapSelection("justifyFull", null);
+		},
+		activeState: function(commonElement){
+			var result = false;
+			if(commonElement) result = commonElement.css('text-align') === 'justify';
+			result = result || this.$editor().queryCommandState('justifyFull');
+			return result;
+		}
+	});
+	taRegisterTool('justifyCenter', {
+		iconclass: 'fa fa-align-center',
+		tooltiptext: taTranslations.justifyCenter.tooltip,
+		action: function(){
+			return this.$editor().wrapSelection("justifyCenter", null);
+		},
+		activeState: function(commonElement){
+			/* istanbul ignore next: */
+			if (commonElement && commonElement.nodeName === '#document') return false;
+			var result = false;
+			if(commonElement) result = commonElement.css('text-align') === 'center';
+			result = result || this.$editor().queryCommandState('justifyCenter');
+			return result;
+		}
+	});
+	taRegisterTool('indent', {
+		iconclass: 'fa fa-indent',
+		tooltiptext: taTranslations.indent.tooltip,
+		action: function(){
+			return this.$editor().wrapSelection("indent", null);
+		},
+		activeState: function(){
+			return this.$editor().queryFormatBlockState('blockquote');
+		},
+		commandKeyCode: 'TabKey'
+	});
+	taRegisterTool('outdent', {
+		iconclass: 'fa fa-outdent',
+		tooltiptext: taTranslations.outdent.tooltip,
+		action: function(){
+			return this.$editor().wrapSelection("outdent", null);
+		},
+		activeState: function(){
+			return false;
+		},
+		commandKeyCode: 'ShiftTabKey'
+	});
+	taRegisterTool('italics', {
+		iconclass: 'fa fa-italic',
+		tooltiptext: taTranslations.italic.tooltip,
+		action: function(){
+			return this.$editor().wrapSelection("italic", null);
+		},
+		activeState: function(){
+			return this.$editor().queryCommandState('italic');
+		},
+		commandKeyCode: 105
+	});
+	taRegisterTool('underline', {
+		iconclass: 'fa fa-underline',
+		tooltiptext: taTranslations.underline.tooltip,
+		action: function(){
+			return this.$editor().wrapSelection("underline", null);
+		},
+		activeState: function(){
+			return this.$editor().queryCommandState('underline');
+		},
+		commandKeyCode: 117
+	});
+	taRegisterTool('strikeThrough', {
+		iconclass: 'fa fa-strikethrough',
+		tooltiptext: taTranslations.strikeThrough.tooltip,
+		action: function(){
+			return this.$editor().wrapSelection("strikeThrough", null);
+		},
+		activeState: function(){
+			return document.queryCommandState('strikeThrough');
+		}
+	});
+	taRegisterTool('clear', {
+		iconclass: 'fa fa-ban',
+		tooltiptext: taTranslations.clear.tooltip,
+		action: function(deferred, restoreSelection){
+			var i;
+			this.$editor().wrapSelection("removeFormat", null);
+			var possibleNodes = angular.element(taSelection.getSelectionElement());
+			// remove lists
+			var removeListElements = function(list){
+				list = angular.element(list);
+				var prevElement = list;
+				angular.forEach(list.children(), function(liElem){
+					var newElem = angular.element('<p></p>');
+					newElem.html(angular.element(liElem).html());
+					prevElement.after(newElem);
+					prevElement = newElem;
+				});
+				list.remove();
+			};
+			angular.forEach(possibleNodes.find("ul"), removeListElements);
+			angular.forEach(possibleNodes.find("ol"), removeListElements);
+			if(possibleNodes[0].tagName.toLowerCase() === 'li'){
+				var _list = possibleNodes[0].parentNode.childNodes;
+				var _preLis = [], _postLis = [], _found = false;
+				for(i = 0; i < _list.length; i++){
+					if(_list[i] === possibleNodes[0]){
+						_found = true;
+					}else if(!_found) _preLis.push(_list[i]);
+					else _postLis.push(_list[i]);
+				}
+				var _parent = angular.element(possibleNodes[0].parentNode);
+				var newElem = angular.element('<p></p>');
+				newElem.html(angular.element(possibleNodes[0]).html());
+				if(_preLis.length === 0 || _postLis.length === 0){
+					if(_postLis.length === 0) _parent.after(newElem);
+					else _parent[0].parentNode.insertBefore(newElem[0], _parent[0]);
+
+					if(_preLis.length === 0 && _postLis.length === 0) _parent.remove();
+					else angular.element(possibleNodes[0]).remove();
+				}else{
+					var _firstList = angular.element('<'+_parent[0].tagName+'></'+_parent[0].tagName+'>');
+					var _secondList = angular.element('<'+_parent[0].tagName+'></'+_parent[0].tagName+'>');
+					for(i = 0; i < _preLis.length; i++) _firstList.append(angular.element(_preLis[i]));
+					for(i = 0; i < _postLis.length; i++) _secondList.append(angular.element(_postLis[i]));
+					_parent.after(_secondList);
+					_parent.after(newElem);
+					_parent.after(_firstList);
+					_parent.remove();
+				}
+				taSelection.setSelectionToElementEnd(newElem[0]);
+			}
+			// clear out all class attributes. These do not seem to be cleared via removeFormat
+			var $editor = this.$editor();
+			var recursiveRemoveClass = function(node){
+				node = angular.element(node);
+				if(node[0] !== $editor.displayElements.text[0]) node.removeAttr('class');
+				angular.forEach(node.children(), recursiveRemoveClass);
+			};
+			angular.forEach(possibleNodes, recursiveRemoveClass);
+			// check if in list. If not in list then use formatBlock option
+			if(possibleNodes[0].tagName.toLowerCase() !== 'li' &&
+				possibleNodes[0].tagName.toLowerCase() !== 'ol' &&
+				possibleNodes[0].tagName.toLowerCase() !== 'ul') this.$editor().wrapSelection("formatBlock", "default");
+			restoreSelection();
+		}
+	});
+
+
+	taRegisterTool('insertImage', {
+		iconclass: 'fa fa-picture-o',
+		tooltiptext: taTranslations.insertImage.tooltip,
+		action: function(){
+			var imageLink;
+			imageLink = $window.prompt(taTranslations.insertImage.dialogPrompt, 'http://');
+			if(imageLink && imageLink !== '' && imageLink !== 'http://'){
+				return this.$editor().wrapSelection('insertImage', imageLink, true);
+			}
+		},
+		onElementSelect: {
+			element: 'img',
+			action: taToolFunctions.imgOnSelectAction
+		}
+	});
+	taRegisterTool('insertVideo', {
+		iconclass: 'fa fa-youtube-play',
+		tooltiptext: taTranslations.insertVideo.tooltip,
+		action: function(){
+			var urlPrompt;
+			urlPrompt = $window.prompt(taTranslations.insertVideo.dialogPrompt, 'https://');
+			if (urlPrompt && urlPrompt !== '' && urlPrompt !== 'https://') {
+
+				videoId = taToolFunctions.extractYoutubeVideoId(urlPrompt);
+
+				/* istanbul ignore else: if it's invalid don't worry - though probably should show some kind of error message */
+				if(videoId){
+					// create the embed link
+					var urlLink = "https://www.youtube.com/embed/" + videoId;
+					// create the HTML
+					// for all options see: http://stackoverflow.com/questions/2068344/how-do-i-get-a-youtube-video-thumbnail-from-the-youtube-api
+					// maxresdefault.jpg seems to be undefined on some.
+					var embed = '<img class="ta-insert-video" src="https://img.youtube.com/vi/' + videoId + '/hqdefault.jpg" ta-insert-video="' + urlLink + '" contenteditable="false" allowfullscreen="true" frameborder="0" />';
+					// insert
+					return this.$editor().wrapSelection('insertHTML', embed, true);
+				}
+			}
+		},
+		onElementSelect: {
+			element: 'img',
+			onlyWithAttrs: ['ta-insert-video'],
+			action: taToolFunctions.imgOnSelectAction
+		}
+	});
+	taRegisterTool('insertLink', {
+		tooltiptext: taTranslations.insertLink.tooltip,
+		iconclass: 'fa fa-link',
+		action: function(){
+			var urlLink;
+			urlLink = $window.prompt(taTranslations.insertLink.dialogPrompt, 'http://');
+			if(urlLink && urlLink !== '' && urlLink !== 'http://'){
+				return this.$editor().wrapSelection('createLink', urlLink, true);
+			}
+		},
+		activeState: function(commonElement){
+			if(commonElement) return commonElement[0].tagName === 'A';
+			return false;
+		},
+		onElementSelect: {
+			element: 'a',
+			action: taToolFunctions.aOnSelectAction
+		}
+	});
+	taRegisterTool('wordcount', {
+		display: '<div id="toolbarWC" style="display:block; min-width:100px;">Words: <span ng-bind="wordcount"></span></div>',
+		disabled: true,
+		wordcount: 0,
+		activeState: function(){ // this fires on keyup
+			var textElement = this.$editor().displayElements.text;
+			/* istanbul ignore next: will default to '' when undefined */
+			var workingHTML = textElement[0].innerHTML || '';
+			var noOfWords = 0;
+
+			/* istanbul ignore if: will default to '' when undefined */
+			if (workingHTML.replace(/\s*<[^>]*?>\s*/g, '') !== '') {
+				noOfWords = workingHTML.replace(/<\/?(b|i|em|strong|span|u|strikethrough|a|img|small|sub|sup|label)( [^>*?])?>/gi, '') // remove inline tags without adding spaces
+										.replace(/(<[^>]*?>\s*<[^>]*?>)/ig, ' ') // replace adjacent tags with possible space between with a space
+										.replace(/(<[^>]*?>)/ig, '') // remove any singular tags
+										.replace(/\s+/ig, ' ') // condense spacing
+										.match(/\S+/g).length; // count remaining non-space strings
+			}
+
+			//Set current scope
+			this.wordcount = noOfWords;
+			//Set editor scope
+			this.$editor().wordcount = noOfWords;
+
+			return false;
+		}
+	});
+	taRegisterTool('charcount', {
+		display: '<div id="toolbarCC" style="display:block; min-width:120px;">Characters: <span ng-bind="charcount"></span></div>',
+		disabled: true,
+		charcount: 0,
+		activeState: function(){ // this fires on keyup
+			var textElement = this.$editor().displayElements.text;
+			var sourceText = textElement[0].innerText || textElement[0].textContent; // to cover the non-jquery use case.
+
+			// Caculate number of chars
+			var noOfChars = sourceText.replace(/(\r\n|\n|\r)/gm,"").replace(/^\s+/g,' ').replace(/\s+$/g, ' ').length;
+			//Set current scope
+			this.charcount = noOfChars;
+			//Set editor scope
+			this.$editor().charcount = noOfChars;
+			return false;
+		}
+	});
+}]);
+
+
+/**
+ * @license AngularJS v1.3.10
+ * (c) 2010-2014 Google, Inc. http://angularjs.org
+ * License: MIT
+ */
+(function(window, angular, undefined) {'use strict';
+
+var $sanitizeMinErr = angular.$$minErr('$sanitize');
+
+/**
+ * @ngdoc module
+ * @name ngSanitize
+ * @description
+ *
+ * # ngSanitize
+ *
+ * The `ngSanitize` module provides functionality to sanitize HTML.
+ *
+ *
+ * <div doc-module-components="ngSanitize"></div>
+ *
+ * See {@link ngSanitize.$sanitize `$sanitize`} for usage.
+ */
+
+/*
+ * HTML Parser By Misko Hevery (misko@hevery.com)
+ * based on:  HTML Parser By John Resig (ejohn.org)
+ * Original code by Erik Arvidsson, Mozilla Public License
+ * http://erik.eae.net/simplehtmlparser/simplehtmlparser.js
+ *
+ * // Use like so:
+ * htmlParser(htmlString, {
+ *     start: function(tag, attrs, unary) {},
+ *     end: function(tag) {},
+ *     chars: function(text) {},
+ *     comment: function(text) {}
+ * });
+ *
+ */
+
+
+/**
+ * @ngdoc service
+ * @name $sanitize
+ * @kind function
+ *
+ * @description
+ *   The input is sanitized by parsing the HTML into tokens. All safe tokens (from a whitelist) are
+ *   then serialized back to properly escaped html string. This means that no unsafe input can make
+ *   it into the returned string, however, since our parser is more strict than a typical browser
+ *   parser, it's possible that some obscure input, which would be recognized as valid HTML by a
+ *   browser, won't make it through the sanitizer. The input may also contain SVG markup.
+ *   The whitelist is configured using the functions `aHrefSanitizationWhitelist` and
+ *   `imgSrcSanitizationWhitelist` of {@link ng.$compileProvider `$compileProvider`}.
+ *
+ * @param {string} html HTML input.
+ * @returns {string} Sanitized HTML.
+ *
+ * @example
+   <example module="sanitizeExample" deps="angular-sanitize.js">
+   <file name="index.html">
+     <script>
+         angular.module('sanitizeExample', ['ngSanitize'])
+           .controller('ExampleController', ['$scope', '$sce', function($scope, $sce) {
+             $scope.snippet =
+               '<p style="color:blue">an html\n' +
+               '<em onmouseover="this.textContent=\'PWN3D!\'">click here</em>\n' +
+               'snippet</p>';
+             $scope.deliberatelyTrustDangerousSnippet = function() {
+               return $sce.trustAsHtml($scope.snippet);
+             };
+           }]);
+     </script>
+     <div ng-controller="ExampleController">
+        Snippet: <textarea ng-model="snippet" cols="60" rows="3"></textarea>
+       <table>
+         <tr>
+           <td>Directive</td>
+           <td>How</td>
+           <td>Source</td>
+           <td>Rendered</td>
+         </tr>
+         <tr id="bind-html-with-sanitize">
+           <td>ng-bind-html</td>
+           <td>Automatically uses $sanitize</td>
+           <td><pre>&lt;div ng-bind-html="snippet"&gt;<br/>&lt;/div&gt;</pre></td>
+           <td><div ng-bind-html="snippet"></div></td>
+         </tr>
+         <tr id="bind-html-with-trust">
+           <td>ng-bind-html</td>
+           <td>Bypass $sanitize by explicitly trusting the dangerous value</td>
+           <td>
+           <pre>&lt;div ng-bind-html="deliberatelyTrustDangerousSnippet()"&gt;
+&lt;/div&gt;</pre>
+           </td>
+           <td><div ng-bind-html="deliberatelyTrustDangerousSnippet()"></div></td>
+         </tr>
+         <tr id="bind-default">
+           <td>ng-bind</td>
+           <td>Automatically escapes</td>
+           <td><pre>&lt;div ng-bind="snippet"&gt;<br/>&lt;/div&gt;</pre></td>
+           <td><div ng-bind="snippet"></div></td>
+         </tr>
+       </table>
+       </div>
+   </file>
+   <file name="protractor.js" type="protractor">
+     it('should sanitize the html snippet by default', function() {
+       expect(element(by.css('#bind-html-with-sanitize div')).getInnerHtml()).
+         toBe('<p>an html\n<em>click here</em>\nsnippet</p>');
+     });
+
+     it('should inline raw snippet if bound to a trusted value', function() {
+       expect(element(by.css('#bind-html-with-trust div')).getInnerHtml()).
+         toBe("<p style=\"color:blue\">an html\n" +
+              "<em onmouseover=\"this.textContent='PWN3D!'\">click here</em>\n" +
+              "snippet</p>");
+     });
+
+     it('should escape snippet without any filter', function() {
+       expect(element(by.css('#bind-default div')).getInnerHtml()).
+         toBe("&lt;p style=\"color:blue\"&gt;an html\n" +
+              "&lt;em onmouseover=\"this.textContent='PWN3D!'\"&gt;click here&lt;/em&gt;\n" +
+              "snippet&lt;/p&gt;");
+     });
+
+     it('should update', function() {
+       element(by.model('snippet')).clear();
+       element(by.model('snippet')).sendKeys('new <b onclick="alert(1)">text</b>');
+       expect(element(by.css('#bind-html-with-sanitize div')).getInnerHtml()).
+         toBe('new <b>text</b>');
+       expect(element(by.css('#bind-html-with-trust div')).getInnerHtml()).toBe(
+         'new <b onclick="alert(1)">text</b>');
+       expect(element(by.css('#bind-default div')).getInnerHtml()).toBe(
+         "new &lt;b onclick=\"alert(1)\"&gt;text&lt;/b&gt;");
+     });
+   </file>
+   </example>
+ */
+function $SanitizeProvider() {
+  this.$get = ['$$sanitizeUri', function($$sanitizeUri) {
+    return function(html) {
+      if (typeof arguments[1] != 'undefined') {
+        arguments[1].version = 'taSanitize';
+      }
+      var buf = [];
+      htmlParser(html, htmlSanitizeWriter(buf, function(uri, isImage) {
+        return !/^unsafe/.test($$sanitizeUri(uri, isImage));
+      }));
+      return buf.join('');
+    };
+  }];
+}
+
+function sanitizeText(chars) {
+  var buf = [];
+  var writer = htmlSanitizeWriter(buf, angular.noop);
+  writer.chars(chars);
+  return buf.join('');
+}
+
+
+// Regular Expressions for parsing tags and attributes
+var START_TAG_REGEXP =
+       /^<((?:[a-zA-Z])[\w:-]*)((?:\s+[\w:-]+(?:\s*=\s*(?:(?:"[^"]*")|(?:'[^']*')|[^>\s]+))?)*)\s*(\/?)\s*(>?)/,
+  END_TAG_REGEXP = /^<\/\s*([\w:-]+)[^>]*>/,
+  ATTR_REGEXP = /([\w:-]+)(?:\s*=\s*(?:(?:"((?:[^"])*)")|(?:'((?:[^'])*)')|([^>\s]+)))?/g,
+  BEGIN_TAG_REGEXP = /^</,
+  BEGING_END_TAGE_REGEXP = /^<\//,
+  COMMENT_REGEXP = /<!--(.*?)-->/g,
+  SINGLE_COMMENT_REGEXP = /(^<!--.*?-->)/,
+  DOCTYPE_REGEXP = /<!DOCTYPE([^>]*?)>/i,
+  CDATA_REGEXP = /<!\[CDATA\[(.*?)]]>/g,
+  SURROGATE_PAIR_REGEXP = /[\uD800-\uDBFF][\uDC00-\uDFFF]/g,
+  // Match everything outside of normal chars and " (quote character)
+  NON_ALPHANUMERIC_REGEXP = /([^\#-~| |!])/g,
+  WHITE_SPACE_REGEXP = /^(\s+)/;
+
+
+// Good source of info about elements and attributes
+// http://dev.w3.org/html5/spec/Overview.html#semantics
+// http://simon.html5.org/html-elements
+
+// Safe Void Elements - HTML5
+// http://dev.w3.org/html5/spec/Overview.html#void-elements
+var voidElements = makeMap("area,br,col,hr,img,wbr,input");
+
+// Elements that you can, intentionally, leave open (and which close themselves)
+// http://dev.w3.org/html5/spec/Overview.html#optional-tags
+var optionalEndTagBlockElements = makeMap("colgroup,dd,dt,li,p,tbody,td,tfoot,th,thead,tr"),
+    optionalEndTagInlineElements = makeMap("rp,rt"),
+    optionalEndTagElements = angular.extend({},
+                                            optionalEndTagInlineElements,
+                                            optionalEndTagBlockElements);
+
+// Safe Block Elements - HTML5
+var blockElements = angular.extend({}, optionalEndTagBlockElements, makeMap("address,article," +
+        "aside,blockquote,caption,center,del,dir,div,dl,figure,figcaption,footer,h1,h2,h3,h4,h5," +
+        "h6,header,hgroup,hr,ins,map,menu,nav,ol,pre,script,section,table,ul"));
+
+// Inline Elements - HTML5
+var inlineElements = angular.extend({}, optionalEndTagInlineElements, makeMap("a,abbr,acronym,b," +
+        "bdi,bdo,big,br,cite,code,del,dfn,em,font,i,img,ins,kbd,label,map,mark,q,ruby,rp,rt,s," +
+        "samp,small,span,strike,strong,sub,sup,time,tt,u,var"));
+
+// SVG Elements
+// https://wiki.whatwg.org/wiki/Sanitization_rules#svg_Elements
+var svgElements = makeMap("animate,animateColor,animateMotion,animateTransform,circle,defs," +
+        "desc,ellipse,font-face,font-face-name,font-face-src,g,glyph,hkern,image,linearGradient," +
+        "line,marker,metadata,missing-glyph,mpath,path,polygon,polyline,radialGradient,rect,set," +
+        "stop,svg,switch,text,title,tspan,use");
+
+// Special Elements (can contain anything)
+var specialElements = makeMap("script,style");
+
+var validElements = angular.extend({},
+                                   voidElements,
+                                   blockElements,
+                                   inlineElements,
+                                   optionalEndTagElements,
+                                   svgElements);
+
+//Attributes that have href and hence need to be sanitized
+var uriAttrs = makeMap("background,cite,href,longdesc,src,usemap,xlink:href");
+
+var htmlAttrs = makeMap('abbr,align,alt,axis,bgcolor,border,cellpadding,cellspacing,class,clear,'+
+    'color,cols,colspan,compact,coords,dir,face,headers,height,hreflang,hspace,'+
+    'id,ismap,lang,language,nohref,nowrap,rel,rev,rows,rowspan,rules,'+
+    'scope,scrolling,shape,size,span,start,summary,target,title,type,'+
+    'valign,value,vspace,width');
+
+// SVG attributes (without "id" and "name" attributes)
+// https://wiki.whatwg.org/wiki/Sanitization_rules#svg_Attributes
+var svgAttrs = makeMap('accent-height,accumulate,additive,alphabetic,arabic-form,ascent,' +
+    'attributeName,attributeType,baseProfile,bbox,begin,by,calcMode,cap-height,class,color,' +
+    'color-rendering,content,cx,cy,d,dx,dy,descent,display,dur,end,fill,fill-rule,font-family,' +
+    'font-size,font-stretch,font-style,font-variant,font-weight,from,fx,fy,g1,g2,glyph-name,' +
+    'gradientUnits,hanging,height,horiz-adv-x,horiz-origin-x,ideographic,k,keyPoints,' +
+    'keySplines,keyTimes,lang,marker-end,marker-mid,marker-start,markerHeight,markerUnits,' +
+    'markerWidth,mathematical,max,min,offset,opacity,orient,origin,overline-position,' +
+    'overline-thickness,panose-1,path,pathLength,points,preserveAspectRatio,r,refX,refY,' +
+    'repeatCount,repeatDur,requiredExtensions,requiredFeatures,restart,rotate,rx,ry,slope,stemh,' +
+    'stemv,stop-color,stop-opacity,strikethrough-position,strikethrough-thickness,stroke,' +
+    'stroke-dasharray,stroke-dashoffset,stroke-linecap,stroke-linejoin,stroke-miterlimit,' +
+    'stroke-opacity,stroke-width,systemLanguage,target,text-anchor,to,transform,type,u1,u2,' +
+    'underline-position,underline-thickness,unicode,unicode-range,units-per-em,values,version,' +
+    'viewBox,visibility,width,widths,x,x-height,x1,x2,xlink:actuate,xlink:arcrole,xlink:role,' +
+    'xlink:show,xlink:title,xlink:type,xml:base,xml:lang,xml:space,xmlns,xmlns:xlink,y,y1,y2,' +
+    'zoomAndPan');
+
+var validAttrs = angular.extend({},
+                                uriAttrs,
+                                svgAttrs,
+                                htmlAttrs);
+
+function makeMap(str) {
+  var obj = {}, items = str.split(','), i;
+  for (i = 0; i < items.length; i++) obj[items[i]] = true;
+  return obj;
+}
+
+
+/**
+ * @example
+ * htmlParser(htmlString, {
+ *     start: function(tag, attrs, unary) {},
+ *     end: function(tag) {},
+ *     chars: function(text) {},
+ *     comment: function(text) {}
+ * });
+ *
+ * @param {string} html string
+ * @param {object} handler
+ */
+function htmlParser(html, handler) {
+  if (typeof html !== 'string') {
+    if (html === null || typeof html === 'undefined') {
+      html = '';
+    } else {
+      html = '' + html;
+    }
+  }
+  var index, chars, match, stack = [], last = html, text;
+  stack.last = function() { return stack[ stack.length - 1 ]; };
+
+  while (html) {
+    text = '';
+    chars = true;
+
+    // Make sure we're not in a script or style element
+    if (!stack.last() || !specialElements[ stack.last() ]) {
+
+      // White space
+      if (WHITE_SPACE_REGEXP.test(html)) {
+        match = html.match(WHITE_SPACE_REGEXP);
+
+        if (match) {
+          var mat = match[0];
+          if (handler.whitespace) handler.whitespace(match[0]);
+          html = html.replace(match[0], '');
+          chars = false;
+        }
+      //Comment
+      } else if (SINGLE_COMMENT_REGEXP.test(html)) {
+        match = html.match(SINGLE_COMMENT_REGEXP);
+
+        if (match) {
+          if (handler.comment) handler.comment(match[1]);
+          html = html.replace(match[0], '');
+          chars = false;
+        }
+      // DOCTYPE
+      } else if (DOCTYPE_REGEXP.test(html)) {
+        match = html.match(DOCTYPE_REGEXP);
+
+        if (match) {
+          html = html.replace(match[0], '');
+          chars = false;
+        }
+      // end tag
+      } else if (BEGING_END_TAGE_REGEXP.test(html)) {
+        match = html.match(END_TAG_REGEXP);
+
+        if (match) {
+          html = html.substring(match[0].length);
+          match[0].replace(END_TAG_REGEXP, parseEndTag);
+          chars = false;
+        }
+
+      // start tag
+      } else if (BEGIN_TAG_REGEXP.test(html)) {
+        match = html.match(START_TAG_REGEXP);
+
+        if (match) {
+          // We only have a valid start-tag if there is a '>'.
+          if (match[4]) {
+            html = html.substring(match[0].length);
+            match[0].replace(START_TAG_REGEXP, parseStartTag);
+          }
+          chars = false;
+        } else {
+          // no ending tag found --- this piece should be encoded as an entity.
+          text += '<';
+          html = html.substring(1);
+        }
+      }
+
+      if (chars) {
+        index = html.indexOf("<");
+
+        text += index < 0 ? html : html.substring(0, index);
+        html = index < 0 ? "" : html.substring(index);
+
+        if (handler.chars) handler.chars(decodeEntities(text));
+      }
+
+    } else {
+      html = html.replace(new RegExp("([^]*)<\\s*\\/\\s*" + stack.last() + "[^>]*>", 'i'),
+        function(all, text) {
+          text = text.replace(COMMENT_REGEXP, "$1").replace(CDATA_REGEXP, "$1");
+
+          if (handler.chars) handler.chars(decodeEntities(text));
+
+          return "";
+      });
+
+      parseEndTag("", stack.last());
+    }
+
+    if (html == last) {
+      throw $sanitizeMinErr('badparse', "The sanitizer was unable to parse the following block " +
+                                        "of html: {0}", html);
+    }
+    last = html;
+  }
+
+  // Clean up any remaining tags
+  parseEndTag();
+
+  function parseStartTag(tag, tagName, rest, unary) {
+    tagName = angular.lowercase(tagName);
+    if (blockElements[ tagName ]) {
+      while (stack.last() && inlineElements[ stack.last() ]) {
+        parseEndTag("", stack.last());
+      }
+    }
+
+    if (optionalEndTagElements[ tagName ] && stack.last() == tagName) {
+      parseEndTag("", tagName);
+    }
+
+    unary = voidElements[ tagName ] || !!unary;
+
+    if (!unary)
+      stack.push(tagName);
+
+    var attrs = {};
+
+    rest.replace(ATTR_REGEXP,
+      function(match, name, doubleQuotedValue, singleQuotedValue, unquotedValue) {
+        var value = doubleQuotedValue
+          || singleQuotedValue
+          || unquotedValue
+          || '';
+
+        attrs[name] = decodeEntities(value);
+    });
+    if (handler.start) handler.start(tagName, attrs, unary);
+  }
+
+  function parseEndTag(tag, tagName) {
+    var pos = 0, i;
+    tagName = angular.lowercase(tagName);
+    if (tagName)
+      // Find the closest opened tag of the same type
+      for (pos = stack.length - 1; pos >= 0; pos--)
+        if (stack[ pos ] == tagName)
+          break;
+
+    if (pos >= 0) {
+      // Close all the open elements, up the stack
+      for (i = stack.length - 1; i >= pos; i--)
+        if (handler.end) handler.end(stack[ i ]);
+
+      // Remove the open elements from the stack
+      stack.length = pos;
+    }
+  }
+}
+
+var hiddenPre=document.createElement("pre");
+var spaceRe = /^(\s*)([\s\S]*?)(\s*)$/;
+/**
+ * decodes all entities into regular string
+ * @param value
+ * @returns {string} A string with decoded entities.
+ */
+function decodeEntities(value) {
+  if (!value) { return ''; }
+
+  // Note: IE8 does not preserve spaces at the start/end of innerHTML
+  // so we must capture them and reattach them afterward
+  var parts = spaceRe.exec(value);
+  var spaceBefore = parts[1];
+  var spaceAfter = parts[3];
+  var content = parts[2];
+  if (content) {
+    hiddenPre.innerHTML=content.replace(/</g,"&lt;");
+    // innerText depends on styling as it doesn't display hidden elements.
+    // Therefore, it's better to use textContent not to cause unnecessary
+    // reflows. However, IE<9 don't support textContent so the innerText
+    // fallback is necessary.
+    content = 'textContent' in hiddenPre ?
+      hiddenPre.textContent : hiddenPre.innerText;
+  }
+  return spaceBefore + content + spaceAfter;
+}
+
+/**
+ * Escapes all potentially dangerous characters, so that the
+ * resulting string can be safely inserted into attribute or
+ * element text.
+ * @param value
+ * @returns {string} escaped text
+ */
+function encodeEntities(value) {
+  return value.
+    replace(/&/g, '&amp;').
+    replace(SURROGATE_PAIR_REGEXP, function(value) {
+      var hi = value.charCodeAt(0);
+      var low = value.charCodeAt(1);
+      return '&#' + (((hi - 0xD800) * 0x400) + (low - 0xDC00) + 0x10000) + ';';
+    }).
+    replace(NON_ALPHANUMERIC_REGEXP, function(value) {
+      // unsafe chars are: \u0000-\u001f \u007f-\u009f \u00ad \u0600-\u0604 \u070f \u17b4 \u17b5 \u200c-\u200f \u2028-\u202f \u2060-\u206f \ufeff \ufff0-\uffff from jslint.com/lint.html
+      // decimal values are: 0-31, 127-159, 173, 1536-1540, 1807, 6068, 6069, 8204-8207, 8232-8239, 8288-8303, 65279, 65520-65535
+      var c = value.charCodeAt(0);
+      // if unsafe character encode
+      if(c <= 159 ||
+        c == 173 ||
+        (c >= 1536 && c <= 1540) ||
+        c == 1807 ||
+        c == 6068 ||
+        c == 6069 ||
+        (c >= 8204 && c <= 8207) ||
+        (c >= 8232 && c <= 8239) ||
+        (c >= 8288 && c <= 8303) ||
+        c == 65279 ||
+        (c >= 65520 && c <= 65535)) return '&#' + c + ';';
+      return value; // avoids multilingual issues
+    }).
+    replace(/</g, '&lt;').
+    replace(/>/g, '&gt;');
+}
+
+var trim = (function() {
+  // native trim is way faster: http://jsperf.com/angular-trim-test
+  // but IE doesn't have it... :-(
+  // TODO: we should move this into IE/ES5 polyfill
+  if (!String.prototype.trim) {
+    return function(value) {
+      return angular.isString(value) ? value.replace(/^\s\s*/, '').replace(/\s\s*$/, '') : value;
+    };
+  }
+  return function(value) {
+    return angular.isString(value) ? value.trim() : value;
+  };
+})();
+
+// Custom logic for accepting certain style options only - textAngular
+// Currently allows only the color, background-color, text-align, float, width and height attributes
+// all other attributes should be easily done through classes.
+function validStyles(styleAttr){
+	var result = '';
+	var styleArray = styleAttr.split(';');
+	angular.forEach(styleArray, function(value){
+		var v = value.split(':');
+		if(v.length == 2){
+			var key = trim(angular.lowercase(v[0]));
+			var value = trim(angular.lowercase(v[1]));
+			if(
+				(key === 'color' || key === 'background-color') && (
+					value.match(/^rgb\([0-9%,\. ]*\)$/i)
+					|| value.match(/^rgba\([0-9%,\. ]*\)$/i)
+					|| value.match(/^hsl\([0-9%,\. ]*\)$/i)
+					|| value.match(/^hsla\([0-9%,\. ]*\)$/i)
+					|| value.match(/^#[0-9a-f]{3,6}$/i)
+					|| value.match(/^[a-z]*$/i)
+				)
+			||
+				key === 'text-align' && (
+					value === 'left'
+					|| value === 'right'
+					|| value === 'center'
+					|| value === 'justify'
+				)
+			||
+				key === 'float' && (
+					value === 'left'
+					|| value === 'right'
+					|| value === 'none'
+				)
+			||
+				(key === 'width' || key === 'height') && (
+					value.match(/[0-9\.]*(px|em|rem|%)/)
+				)
+			|| // Reference #520
+				(key === 'direction' && value.match(/^ltr|rtl|initial|inherit$/))
+			) result += key + ': ' + value + ';';
+		}
+	});
+	return result;
+}
+
+// this function is used to manually allow specific attributes on specific tags with certain prerequisites
+function validCustomTag(tag, attrs, lkey, value){
+	// catch the div placeholder for the iframe replacement
+    if (tag === 'img' && attrs['ta-insert-video']){
+        if(lkey === 'ta-insert-video' || lkey === 'allowfullscreen' || lkey === 'frameborder' || (lkey === 'contenteditable' && value === 'false')) return true;
+    }
+    return false;
+}
+
+/**
+ * create an HTML/XML writer which writes to buffer
+ * @param {Array} buf use buf.jain('') to get out sanitized html string
+ * @returns {object} in the form of {
+ *     start: function(tag, attrs, unary) {},
+ *     end: function(tag) {},
+ *     chars: function(text) {},
+ *     comment: function(text) {}
+ * }
+ */
+function htmlSanitizeWriter(buf, uriValidator) {
+  var ignore = false;
+  var out = angular.bind(buf, buf.push);
+  return {
+    start: function(tag, attrs, unary) {
+      tag = angular.lowercase(tag);
+      if (!ignore && specialElements[tag]) {
+        ignore = tag;
+      }
+      if (!ignore && validElements[tag] === true) {
+        out('<');
+        out(tag);
+        angular.forEach(attrs, function(value, key) {
+          var lkey=angular.lowercase(key);
+          var isImage=(tag === 'img' && lkey === 'src') || (lkey === 'background');
+          if ((lkey === 'style' && (value = validStyles(value)) !== '') || validCustomTag(tag, attrs, lkey, value) || validAttrs[lkey] === true &&
+            (uriAttrs[lkey] !== true || uriValidator(value, isImage))) {
+            out(' ');
+            out(key);
+            out('="');
+            out(encodeEntities(value));
+            out('"');
+          }
+        });
+        out(unary ? '/>' : '>');
+      }
+    },
+    comment: function (com) {
+      out(com);
+    },
+    whitespace: function (ws) {
+      out(encodeEntities(ws));
+    },
+    end: function(tag) {
+        tag = angular.lowercase(tag);
+        if (!ignore && validElements[tag] === true) {
+          out('</');
+          out(tag);
+          out('>');
+        }
+        if (tag == ignore) {
+          ignore = false;
+        }
+      },
+    chars: function(chars) {
+        if (!ignore) {
+          out(encodeEntities(chars));
+        }
+      }
+  };
+}
+
+
+// define ngSanitize module and register $sanitize service
+angular.module('ngSanitize', []).provider('$sanitize', $SanitizeProvider);
+
+/* global sanitizeText: false */
+
+/**
+ * @ngdoc filter
+ * @name linky
+ * @kind function
+ *
+ * @description
+ * Finds links in text input and turns them into html links. Supports http/https/ftp/mailto and
+ * plain email address links.
+ *
+ * Requires the {@link ngSanitize `ngSanitize`} module to be installed.
+ *
+ * @param {string} text Input text.
+ * @param {string} target Window (_blank|_self|_parent|_top) or named frame to open links in.
+ * @returns {string} Html-linkified text.
+ *
+ * @usage
+   <span ng-bind-html="linky_expression | linky"></span>
+ *
+ * @example
+   <example module="linkyExample" deps="angular-sanitize.js">
+     <file name="index.html">
+       <script>
+         angular.module('linkyExample', ['ngSanitize'])
+           .controller('ExampleController', ['$scope', function($scope) {
+             $scope.snippet =
+               'Pretty text with some links:\n'+
+               'http://angularjs.org/,\n'+
+               'mailto:us@somewhere.org,\n'+
+               'another@somewhere.org,\n'+
+               'and one more: ftp://127.0.0.1/.';
+             $scope.snippetWithTarget = 'http://angularjs.org/';
+           }]);
+       </script>
+       <div ng-controller="ExampleController">
+       Snippet: <textarea ng-model="snippet" cols="60" rows="3"></textarea>
+       <table>
+         <tr>
+           <td>Filter</td>
+           <td>Source</td>
+           <td>Rendered</td>
+         </tr>
+         <tr id="linky-filter">
+           <td>linky filter</td>
+           <td>
+             <pre>&lt;div ng-bind-html="snippet | linky"&gt;<br>&lt;/div&gt;</pre>
+           </td>
+           <td>
+             <div ng-bind-html="snippet | linky"></div>
+           </td>
+         </tr>
+         <tr id="linky-target">
+          <td>linky target</td>
+          <td>
+            <pre>&lt;div ng-bind-html="snippetWithTarget | linky:'_blank'"&gt;<br>&lt;/div&gt;</pre>
+          </td>
+          <td>
+            <div ng-bind-html="snippetWithTarget | linky:'_blank'"></div>
+          </td>
+         </tr>
+         <tr id="escaped-html">
+           <td>no filter</td>
+           <td><pre>&lt;div ng-bind="snippet"&gt;<br>&lt;/div&gt;</pre></td>
+           <td><div ng-bind="snippet"></div></td>
+         </tr>
+       </table>
+     </file>
+     <file name="protractor.js" type="protractor">
+       it('should linkify the snippet with urls', function() {
+         expect(element(by.id('linky-filter')).element(by.binding('snippet | linky')).getText()).
+             toBe('Pretty text with some links: http://angularjs.org/, us@somewhere.org, ' +
+                  'another@somewhere.org, and one more: ftp://127.0.0.1/.');
+         expect(element.all(by.css('#linky-filter a')).count()).toEqual(4);
+       });
+
+       it('should not linkify snippet without the linky filter', function() {
+         expect(element(by.id('escaped-html')).element(by.binding('snippet')).getText()).
+             toBe('Pretty text with some links: http://angularjs.org/, mailto:us@somewhere.org, ' +
+                  'another@somewhere.org, and one more: ftp://127.0.0.1/.');
+         expect(element.all(by.css('#escaped-html a')).count()).toEqual(0);
+       });
+
+       it('should update', function() {
+         element(by.model('snippet')).clear();
+         element(by.model('snippet')).sendKeys('new http://link.');
+         expect(element(by.id('linky-filter')).element(by.binding('snippet | linky')).getText()).
+             toBe('new http://link.');
+         expect(element.all(by.css('#linky-filter a')).count()).toEqual(1);
+         expect(element(by.id('escaped-html')).element(by.binding('snippet')).getText())
+             .toBe('new http://link.');
+       });
+
+       it('should work with the target property', function() {
+        expect(element(by.id('linky-target')).
+            element(by.binding("snippetWithTarget | linky:'_blank'")).getText()).
+            toBe('http://angularjs.org/');
+        expect(element(by.css('#linky-target a')).getAttribute('target')).toEqual('_blank');
+       });
+     </file>
+   </example>
+ */
+angular.module('ngSanitize').filter('linky', ['$sanitize', function($sanitize) {
+  var LINKY_URL_REGEXP =
+        /((ftp|https?):\/\/|(www\.)|(mailto:)?[A-Za-z0-9._%+-]+@)\S*[^\s.;,(){}<>"”’]/,
+      MAILTO_REGEXP = /^mailto:/;
+
+  return function(text, target) {
+    if (!text) return text;
+    var match;
+    var raw = text;
+    var html = [];
+    var url;
+    var i;
+    while ((match = raw.match(LINKY_URL_REGEXP))) {
+      // We can not end in these as they are sometimes found at the end of the sentence
+      url = match[0];
+      // if we did not match ftp/http/www/mailto then assume mailto
+      if (!match[2] && !match[4]) {
+        url = (match[3] ? 'http://' : 'mailto:') + url;
+      }
+      i = match.index;
+      addText(raw.substr(0, i));
+      addLink(url, match[0].replace(MAILTO_REGEXP, ''));
+      raw = raw.substring(i + match[0].length);
+    }
+    addText(raw);
+    return $sanitize(html.join(''));
+
+    function addText(text) {
+      if (!text) {
+        return;
+      }
+      html.push(sanitizeText(text));
+    }
+
+    function addLink(url, text) {
+      html.push('<a ');
+      if (angular.isDefined(target)) {
+        html.push('target="',
+                  target,
+                  '" ');
+      }
+      html.push('href="',
+                url.replace(/"/g, '&quot;'),
+                '">');
+      addText(text);
+      html.push('</a>');
+    }
+  };
+}]);
+
+
+})(window, window.angular);
+
+
 var _browserDetect = {
 	ie: (function(){
 		var undef,
@@ -258,7 +1881,7 @@ angular.module('textAngular.factories', [])
 			tag: 'i'
 		}
 	];
-	
+
 	var styleMatch = [];
 	for(var i = 0; i < convert_infos.length; i++){
 		var _partialStyle = '(' + convert_infos[i].property + ':\\s*(';
@@ -271,7 +1894,7 @@ angular.module('textAngular.factories', [])
 		styleMatch.push(_partialStyle);
 	}
 	var styleRegexString = '(' + styleMatch.join('|') + ')';
-	
+
 	function wrapNested(html, wrapTag) {
 		var depth = 0;
 		var lastIndex = 0;
@@ -290,7 +1913,7 @@ angular.module('textAngular.factories', [])
 			angular.element(wrapTag)[0].outerHTML.substring(wrapTag.length) +
 			html.substring(lastIndex);
 	}
-	
+
 	function transformLegacyStyles(html){
 		if(!html || !angular.isString(html) || html.length <= 0) return html;
 		var i;
@@ -338,7 +1961,7 @@ angular.module('textAngular.factories', [])
 		else finalHtml += html.substring(lastIndex);
 		return finalHtml;
 	}
-	
+
 	function transformLegacyAttributes(html){
 		if(!html || !angular.isString(html) || html.length <= 0) return html;
 		// replace all align='...' tags with text-align attributes
@@ -367,7 +1990,7 @@ angular.module('textAngular.factories', [])
 		// return with remaining html
 		return finalHtml + html.substring(lastIndex);
 	}
-	
+
 	return function taSanitize(unsafe, oldsafe, ignore){
 		// unsafe html should NEVER built into a DOM object via angular.element. This allows XSS to be inserted and run.
 		if ( !ignore ) {
@@ -381,7 +2004,7 @@ angular.module('textAngular.factories', [])
 		// any exceptions (lets say, color for example) should be made here but with great care
 		// setup unsafe element for modification
 		unsafe = transformLegacyAttributes(unsafe);
-		
+
 		var safe;
 		try {
 			safe = $sanitize(unsafe);
@@ -390,9 +2013,9 @@ angular.module('textAngular.factories', [])
 		} catch (e){
 			safe = oldsafe || '';
 		}
-		
+
 		// Do processing for <pre> tags, removing tabs and return carriages outside of them
-		
+
 		var _preTags = safe.match(/(<pre[^>]*>.*?<\/pre[^>]*>)/ig);
 		var processedSafe = safe.replace(/(&#(9|10);)*/ig, '');
 		var re = /<pre[^>]*>.*?<\/pre[^>]*>/ig;
@@ -720,39 +2343,39 @@ function($window, $document, taDOM){
 		},
 		setSelection: function(el, start, end){
 			var range = rangy.createRange();
-			
+
 			range.setStart(el, start);
 			range.setEnd(el, end);
-			
+
 			rangy.getSelection().setSingleRange(range);
 		},
 		setSelectionBeforeElement: function (el){
 			var range = rangy.createRange();
-			
+
 			range.selectNode(el);
 			range.collapse(true);
-			
+
 			rangy.getSelection().setSingleRange(range);
 		},
 		setSelectionAfterElement: function (el){
 			var range = rangy.createRange();
-			
+
 			range.selectNode(el);
 			range.collapse(false);
-			
+
 			rangy.getSelection().setSingleRange(range);
 		},
 		setSelectionToElementStart: function (el){
 			var range = rangy.createRange();
-			
+
 			range.selectNodeContents(el);
 			range.collapse(true);
-			
+
 			rangy.getSelection().setSingleRange(range);
 		},
 		setSelectionToElementEnd: function (el){
 			var range = rangy.createRange();
-			
+
 			range.selectNodeContents(el);
 			range.collapse(false);
 			if(el.childNodes && el.childNodes[el.childNodes.length - 1] && el.childNodes[el.childNodes.length - 1].nodeName === 'br'){
@@ -769,7 +2392,7 @@ function($window, $document, taDOM){
 			var frag = _document.createDocumentFragment();
 			var children = element[0].childNodes;
 			var isInline = true;
-			
+
 			if(children.length > 0){
 				// NOTE!! We need to do the following:
 				// check for blockelements - if they exist then we have to split the current element in half (and all others up to the closest block element) and insert all children in-between.
@@ -791,7 +2414,7 @@ function($window, $document, taDOM){
 				// paste text of some sort
 				lastNode = frag = _document.createTextNode(html);
 			}
-			
+
 			// Other Edge case - selected data spans multiple blocks.
 			if(isInline){
 				range.deleteContents();
@@ -816,7 +2439,7 @@ function($window, $document, taDOM){
 							secondParent = parent.cloneNode();
 							// split the nodes into two lists - before and after, splitting the node with the selection into 2 text nodes.
 							taDOM.splitNodes(parent.childNodes, parent, secondParent, range.startContainer, range.startOffset);
-							
+
 							// Escape out of the inline tags like b
 							while(!VALIDELEMENTS.test(parent.nodeName)){
 								angular.element(parent).after(secondParent);
@@ -831,12 +2454,12 @@ function($window, $document, taDOM){
 							secondParent = parent.cloneNode();
 							taDOM.splitNodes(parent.childNodes, parent, secondParent, undefined, undefined, range.startOffset);
 						}
-						
+
 						angular.element(parent).after(secondParent);
 						// put cursor to end of inserted content
 						range.setStartAfter(parent);
 						range.setEndAfter(parent);
-						
+
 						if(/^(|<br(|\/)>)$/i.test(parent.innerHTML.trim())){
 							range.setStartBefore(parent);
 							range.setEndBefore(parent);
@@ -862,7 +2485,7 @@ function($window, $document, taDOM){
 					range.deleteContents();
 				}
 			}
-			
+
 			range.insertNode(frag);
 			if(lastNode){
 				api.setSelectionToElementEnd(lastNode);
@@ -884,35 +2507,35 @@ function($window, $document, taDOM){
 			if(element.attr(attribute) !== undefined) resultingElements.push(element);
 			return resultingElements;
 		},
-		
+
 		transferChildNodes: function(source, target){
 			// clear out target
 			target.innerHTML = '';
 			while(source.childNodes.length > 0) target.appendChild(source.childNodes[0]);
 			return target;
 		},
-		
+
 		splitNodes: function(nodes, target1, target2, splitNode, subSplitIndex, splitIndex){
 			if(!splitNode && isNaN(splitIndex)) throw new Error('taDOM.splitNodes requires a splitNode or splitIndex');
 			var startNodes = document.createDocumentFragment();
 			var endNodes = document.createDocumentFragment();
 			var index = 0;
-			
+
 			while(nodes.length > 0 && (isNaN(splitIndex) || splitIndex !== index) && nodes[0] !== splitNode){
 				startNodes.appendChild(nodes[0]); // this removes from the nodes array (if proper childNodes object.
 				index++;
 			}
-			
+
 			if(!isNaN(subSplitIndex) && subSplitIndex >= 0 && nodes[0]){
 				startNodes.appendChild(document.createTextNode(nodes[0].nodeValue.substring(0, subSplitIndex)));
 				nodes[0].nodeValue = nodes[0].nodeValue.substring(subSplitIndex);
 			}
 			while(nodes.length > 0) endNodes.appendChild(nodes[0]);
-			
+
 			taDOM.transferChildNodes(startNodes, target1);
 			taDOM.transferChildNodes(endNodes, target2);
 		},
-		
+
 		transferNodeAttributes: function(source, target){
 			for(var i = 0; i < source.attributes.length; i++) target.setAttribute(source.attributes[i].name, source.attributes[i].value);
 			return target;
